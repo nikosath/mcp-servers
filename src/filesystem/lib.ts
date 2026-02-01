@@ -4,8 +4,11 @@ import os from 'os';
 import { randomBytes } from 'crypto';
 import { diffLines, createTwoFilesPatch } from 'diff';
 import { minimatch } from 'minimatch';
+import * as iconv from 'iconv-lite';
+import * as chardet from 'chardet';
 import { normalizePath, expandHome } from './path-utils.js';
 import { isPathWithinAllowedDirectories } from './path-validation.js';
+import { getCandidateEncodings } from './encoding-config.js';
 
 // Global allowed directories - set by the main module
 let allowedDirectories: string[] = [];
@@ -117,6 +120,74 @@ export async function validatePath(requestedPath: string): Promise<string> {
 }
 
 
+// Encoding Detection Functions
+
+/**
+ * Detect the encoding of a file buffer using ordered candidate list and round-trip testing
+ * 
+ * @param buffer - The file contents as a Buffer
+ * @param candidates - Ordered list of candidate encodings to try
+ * @returns The detected encoding name and decoded text
+ */
+export async function detectEncoding(buffer: Buffer, candidates: string[]): Promise<{ encoding: string; text: string }> {
+  // Try each candidate in order with round-trip test
+  for (const candidate of candidates) {
+    try {
+      let decoded: string;
+      let reencoded: Buffer;
+      
+      // For UTF family, use Node.js built-in
+      if (candidate === 'utf-8' || candidate === 'utf8') {
+        decoded = buffer.toString('utf-8');
+        reencoded = Buffer.from(decoded, 'utf-8');
+      } else {
+        // Use iconv-lite for other encodings
+        if (!iconv.encodingExists(candidate)) {
+          continue; // Skip unsupported encodings
+        }
+        decoded = iconv.decode(buffer, candidate);
+        reencoded = iconv.encode(decoded, candidate);
+      }
+      
+      // Compare buffers - if equal, this encoding round-trips successfully
+      if (buffer.equals(reencoded)) {
+        return { encoding: candidate, text: decoded };
+      }
+    } catch (error) {
+      // Decoding failed, try next candidate
+      continue;
+    }
+  }
+  
+  // If no candidate worked, use chardet as fallback
+  try {
+    const detectedEncoding = chardet.detect(buffer);
+    if (detectedEncoding) {
+      // Normalize the detected encoding name
+      const normalized = detectedEncoding.toLowerCase();
+      
+      // Check if it matches any of our known encodings
+      const matchedCandidate = candidates.find(c => c.toLowerCase() === normalized);
+      if (matchedCandidate) {
+        const decoded = iconv.decode(buffer, matchedCandidate);
+        return { encoding: matchedCandidate, text: decoded };
+      }
+      
+      // Try using chardet's suggestion directly if iconv supports it
+      if (iconv.encodingExists(detectedEncoding)) {
+        const decoded = iconv.decode(buffer, detectedEncoding);
+        return { encoding: detectedEncoding, text: decoded };
+      }
+    }
+  } catch (error) {
+    // Chardet failed, fall through to UTF-8 default
+  }
+  
+  // Final fallback to UTF-8
+  const text = buffer.toString('utf-8');
+  return { encoding: 'utf-8', text };
+}
+
 // File Operations
 export async function getFileStats(filePath: string): Promise<FileInfo> {
   const stats = await fs.stat(filePath);
@@ -135,11 +206,16 @@ export async function readFileContent(filePath: string, encoding: string = 'utf-
   return await fs.readFile(filePath, encoding as BufferEncoding);
 }
 
-export async function writeFileContent(filePath: string, content: string): Promise<void> {
+export async function writeFileContent(filePath: string, content: string, encoding: string = 'utf-8'): Promise<void> {
   try {
+    // Prepare content buffer with specified encoding
+    const buffer = encoding === 'utf-8' || encoding === 'utf8'
+      ? Buffer.from(content, 'utf-8')
+      : iconv.encode(content, encoding);
+    
     // Security: 'wx' flag ensures exclusive creation - fails if file/symlink exists,
     // preventing writes through pre-existing symlinks
-    await fs.writeFile(filePath, content, { encoding: "utf-8", flag: 'wx' });
+    await fs.writeFile(filePath, buffer, { flag: 'wx' });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
       // Security: Use atomic rename to prevent race conditions where symlinks
@@ -147,7 +223,10 @@ export async function writeFileContent(filePath: string, content: string): Promi
       // replace the target file atomically and don't follow symlinks.
       const tempPath = `${filePath}.${randomBytes(16).toString('hex')}.tmp`;
       try {
-        await fs.writeFile(tempPath, content, 'utf-8');
+        const buffer = encoding === 'utf-8' || encoding === 'utf8'
+          ? Buffer.from(content, 'utf-8')
+          : iconv.encode(content, encoding);
+        await fs.writeFile(tempPath, buffer);
         await fs.rename(tempPath, filePath);
       } catch (renameError) {
         try {
@@ -173,11 +252,16 @@ export async function applyFileEdits(
   edits: FileEdit[],
   dryRun: boolean = false
 ): Promise<string> {
-  // Read file content and normalize line endings
-  const content = normalizeLineEndings(await fs.readFile(filePath, 'utf-8'));
+  // Read file as buffer and detect encoding
+  const buffer = await fs.readFile(filePath);
+  const candidates = await getCandidateEncodings();
+  const { encoding, text: content } = await detectEncoding(buffer, candidates);
+  
+  // Normalize line endings
+  const normalizedContent = normalizeLineEndings(content);
 
   // Apply edits sequentially
-  let modifiedContent = content;
+  let modifiedContent = normalizedContent;
   for (const edit of edits) {
     const normalizedOld = normalizeLineEndings(edit.oldText);
     const normalizedNew = normalizeLineEndings(edit.newText);
@@ -230,7 +314,7 @@ export async function applyFileEdits(
   }
 
   // Create unified diff
-  const diff = createUnifiedDiff(content, modifiedContent, filePath);
+  const diff = createUnifiedDiff(normalizedContent, modifiedContent, filePath);
 
   // Format diff with appropriate number of backticks
   let numBackticks = 3;
@@ -245,7 +329,11 @@ export async function applyFileEdits(
     // replace the target file atomically and don't follow symlinks.
     const tempPath = `${filePath}.${randomBytes(16).toString('hex')}.tmp`;
     try {
-      await fs.writeFile(tempPath, modifiedContent, 'utf-8');
+      // Encode with the detected encoding to preserve it
+      const outputBuffer = encoding === 'utf-8' || encoding === 'utf8'
+        ? Buffer.from(modifiedContent, 'utf-8')
+        : iconv.encode(modifiedContent, encoding);
+      await fs.writeFile(tempPath, outputBuffer);
       await fs.rename(tempPath, filePath);
     } catch (error) {
       try {
