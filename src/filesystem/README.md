@@ -60,6 +60,142 @@ The server's directory access control follows this flow:
 
 **Note**: The server will only allow operations within directories specified either via `args` or via Roots.
 
+## Encoding Detection and Preservation
+
+The server automatically detects and preserves file encodings when reading and writing text files. This prevents corruption of files encoded in non-UTF-8 character sets (such as Windows-1253 for Greek text).
+
+### How It Works
+
+1. **Reading Files**: When a file is read, the server:
+   - Reads the file as a binary buffer
+   - Tries each candidate encoding in order using round-trip verification
+   - Decodes the buffer with a candidate encoding
+   - Re-encodes the decoded string with the same encoding
+   - If the re-encoded buffer matches the original buffer exactly, that encoding is selected
+   - If no candidate succeeds, falls back to `chardet` for detection
+   - Defaults to UTF-8 if detection fails
+
+2. **Writing Files**: When a file is written:
+   - Uses the detected encoding from the read operation
+   - Encodes the content with the appropriate encoding before writing
+   - Maintains byte-perfect compatibility with the original encoding
+
+3. **Editing Files**: The `edit_file` tool:
+   - Detects encoding when reading
+   - Applies edits to the decoded text
+   - Re-encodes with the detected encoding when writing
+   - Preserves the original file's encoding
+
+### Configuration Precedence
+
+Candidate encodings can be configured through multiple methods, with the following precedence (highest to lowest):
+
+1. **CLI flag** (highest priority)
+   ```bash
+   mcp-server-filesystem --candidate-encodings "utf-8,windows-1253,iso-8859-7" /path/to/dir
+   ```
+
+2. **Environment variable**
+   ```bash
+   export MCP_CANDIDATE_ENCODINGS="utf-8,windows-1253,iso-8859-7"
+   mcp-server-filesystem /path/to/dir
+   ```
+
+3. **.vscode/settings.json** in repository root
+   ```json
+   {
+     "files.candidateGuessEncodings": ["utf-8", "windows-1253", "iso-8859-7"]
+   }
+   ```
+   Or as comma-separated string:
+   ```json
+   {
+     "files.candidateGuessEncodings": "utf-8,windows-1253,iso-8859-7"
+   }
+   ```
+
+4. **.mcp-server.json** at repository root (editable server config fallback)
+   ```json
+   {
+     "files.candidateGuessEncodings": ["utf-8", "windows-1253", "iso-8859-7"]
+   }
+   ```
+
+5. **Default fallback**: `["utf-8", "windows-1253"]`
+
+### Supported Encodings
+
+The server supports all encodings provided by `iconv-lite`, including:
+- `utf-8` (UTF-8)
+- `windows-1253` / `cp1253` (Greek)
+- `iso-8859-7` (Greek)
+- `iso-8859-1` / `latin1` (Western European)
+- `ascii` (ASCII)
+- And many more (see [iconv-lite documentation](https://github.com/ashtuchkin/iconv-lite/wiki/Supported-Encodings))
+
+Encoding names are normalized and common aliases are supported (e.g., `cp1253` and `windows1253` both map to `windows-1253`).
+
+### Usage Examples
+
+#### Example 1: Working with Greek text files
+```bash
+# Start server with Greek encoding support
+mcp-server-filesystem --candidate-encodings "utf-8,windows-1253,iso-8859-7" ~/documents
+
+# The server will automatically detect and preserve Windows-1253 or ISO-8859-7 encoding
+# when reading/writing Greek text files
+```
+
+#### Example 2: Using environment variable
+```bash
+# Set candidate encodings globally
+export MCP_CANDIDATE_ENCODINGS="utf-8,windows-1252,iso-8859-1"
+
+# Start server
+mcp-server-filesystem ~/documents
+```
+
+#### Example 3: Project-specific configuration
+Create `.mcp-server.json` in your project root:
+```json
+{
+  "files.candidateGuessEncodings": ["utf-8", "windows-1253", "windows-1252", "iso-8859-1"]
+}
+```
+
+Then start the server in that directory:
+```bash
+cd ~/my-project
+mcp-server-filesystem .
+```
+
+### Migration Notes
+
+**Breaking Changes**: None. The encoding detection is fully backward compatible.
+
+**New Behavior**:
+- Files are now read as buffers and encoding is auto-detected
+- `readFileContent()` returns a string by default, preserving backward compatibility
+- `writeFileContent()` now writes buffers encoded with the appropriate encoding
+- `applyFileEdits()` preserves the original file's encoding
+
+**Testing Your Configuration**:
+1. Create a test file with non-UTF-8 content (e.g., Greek text in Windows-1253)
+2. Read the file using `read_text_file` - text should display correctly
+3. Edit the file using `edit_file` - encoding should be preserved
+4. Verify the file's bytes remain unchanged for unmodified content
+
+### Troubleshooting
+
+**Issue**: Text displays as garbled characters
+- **Solution**: Add the correct encoding to your candidate list. The encoding detection may be selecting the wrong encoding if the correct one isn't in the candidate list.
+
+**Issue**: Encoding detection is slow
+- **Solution**: Order your candidate encodings with the most common ones first. The server tries each encoding in order until one succeeds with round-trip verification.
+
+**Issue**: Wrong encoding detected
+- **Solution**: Be more specific with your candidate list. Remove unlikely encodings that might falsely match due to round-trip verification succeeding with incorrect encoding.
+
 
 
 ## API
@@ -72,7 +208,8 @@ The server's directory access control follows this flow:
     - `path` (string)
     - `head` (number, optional): First N lines
     - `tail` (number, optional): Last N lines
-  - Always treats the file as UTF-8 text regardless of extension
+  - Automatically detects and decodes file encoding (see Encoding Detection section)
+  - Returns properly decoded text regardless of original encoding
   - Cannot specify both `head` and `tail` simultaneously
 
 - **read_media_file**
@@ -91,6 +228,7 @@ The server's directory access control follows this flow:
   - Inputs:
     - `path` (string): File location
     - `content` (string): File content
+  - Automatically preserves file encoding when overwriting existing files
 
 - **edit_file**
   - Make selective edits using advanced pattern matching and formatting
@@ -101,6 +239,7 @@ The server's directory access control follows this flow:
     - Indentation style detection and preservation
     - Git-style diff output with context
     - Preview changes with dry run mode
+    - Automatic encoding detection and preservation
   - Inputs:
     - `path` (string): File to edit
     - `edits` (array): List of edit operations
@@ -108,6 +247,7 @@ The server's directory access control follows this flow:
       - `newText` (string): Text to replace with
     - `dryRun` (boolean): Preview changes without applying (default: false)
   - Returns detailed diff and match information for dry runs, otherwise applies changes
+  - Preserves the original file's encoding (e.g., Windows-1253, ISO-8859-7)
   - Best Practice: Always use dryRun first to preview changes before applying them
 
 - **create_directory**
