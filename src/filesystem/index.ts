@@ -30,8 +30,33 @@ import {
 
 // Command line argument parsing
 const args = process.argv.slice(2);
-if (args.length === 0) {
-  console.error("Usage: mcp-server-filesystem [allowed-directory] [additional-directories...]");
+
+// Parse --candidate-encodings flag
+let candidateEncodingsOverride: string | undefined;
+const filteredArgs: string[] = [];
+
+for (let i = 0; i < args.length; i++) {
+  const arg = args[i];
+  if (arg === '--candidate-encodings' && i + 1 < args.length) {
+    candidateEncodingsOverride = args[i + 1];
+    i++; // Skip next arg as it's the value
+  } else if (arg.startsWith('--candidate-encodings=')) {
+    candidateEncodingsOverride = arg.split('=')[1];
+  } else {
+    filteredArgs.push(arg);
+  }
+}
+
+// Set environment variable if CLI flag provided (highest precedence)
+if (candidateEncodingsOverride) {
+  process.env.MCP_CANDIDATE_ENCODINGS = candidateEncodingsOverride;
+}
+
+if (filteredArgs.length === 0) {
+  console.error("Usage: mcp-server-filesystem [options] [allowed-directory] [additional-directories...]");
+  console.error("Options:");
+  console.error("  --candidate-encodings <encodings>  Comma-separated list of candidate encodings (e.g., \"utf-8,windows1253\")");
+  console.error("");
   console.error("Note: Allowed directories can be provided via:");
   console.error("  1. Command-line arguments (shown above)");
   console.error("  2. MCP roots protocol (if client supports it)");
@@ -40,7 +65,7 @@ if (args.length === 0) {
 
 // Store allowed directories in normalized and resolved form
 let allowedDirectories = await Promise.all(
-  args.map(async (dir) => {
+  filteredArgs.map(async (dir) => {
     const expanded = expandHome(dir);
     const absolute = path.resolve(expanded);
     try {
