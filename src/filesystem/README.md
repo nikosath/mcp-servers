@@ -41,9 +41,9 @@ Candidate encodings can be configured via (in order of precedence):
 
 ### How It Works
 
-- When reading files, the server attempts to detect the encoding by trying each candidate in order
-- Detection uses round-trip validation: decode with a candidate encoding, re-encode, and verify the bytes match
-- If round-trip validation is inconclusive, the server uses confidence-based detection via chardet
+- When reading files, the server uses chardet for automatic encoding detection
+- Detection is validated using round-trip testing: decode with detected encoding, re-encode, and verify bytes match
+- If chardet fails or detected encoding isn't in candidate list, tries each candidate in order with round-trip validation
 - Once detected, the encoding is preserved when writing the file back
 - The `edit_file` tool automatically preserves the original encoding when applying edits
 

@@ -221,7 +221,7 @@ export async function readFileContent(
     encoding = encodingOrCandidates;
     const normalizedEncoding = encoding.toLowerCase().replace(/[_-]/g, '');
     
-    if (normalizedEncoding === 'utf8' || normalizedEncoding === 'utf-8') {
+    if (normalizedEncoding === 'utf8') {
       // Use native Node.js UTF-8 decoding for efficiency
       content = buffer.toString('utf-8');
     } else {
@@ -234,7 +234,7 @@ export async function readFileContent(
     encoding = await detectEncoding(buffer, candidates);
     
     const normalizedEncoding = encoding.toLowerCase().replace(/[_-]/g, '');
-    if (normalizedEncoding === 'utf8' || normalizedEncoding === 'utf-8') {
+    if (normalizedEncoding === 'utf8') {
       content = buffer.toString('utf-8');
     } else {
       content = iconv.decode(buffer, normalizedEncoding);
@@ -249,7 +249,7 @@ export async function writeFileContent(filePath: string, content: string, encodi
   const normalizedEncoding = encoding.toLowerCase().replace(/[_-]/g, '');
   let buffer: Buffer;
   
-  if (normalizedEncoding === 'utf8' || normalizedEncoding === 'utf-8') {
+  if (normalizedEncoding === 'utf8') {
     buffer = Buffer.from(content, 'utf-8');
   } else {
     buffer = iconv.encode(content, normalizedEncoding);
@@ -362,7 +362,7 @@ export async function applyFileEdits(
   if (!dryRun) {
     // Write back with the same encoding that was detected
     const normalizedEncoding = encoding.toLowerCase().replace(/[_-]/g, '');
-    const buffer = normalizedEncoding === 'utf8' || normalizedEncoding === 'utf-8'
+    const buffer = normalizedEncoding === 'utf8'
       ? Buffer.from(modifiedContent, 'utf-8')
       : iconv.encode(modifiedContent, normalizedEncoding);
     
