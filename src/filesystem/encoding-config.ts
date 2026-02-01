@@ -50,6 +50,10 @@ function parseCandidates(value: unknown): string[] | null {
 
 /**
  * Try to read and parse candidate encodings from .vscode/settings.json
+ * 
+ * Security Note: This reads from process.cwd() which is controlled by the server operator
+ * who launches the MCP server. This is not a security risk as the operator already has
+ * full control over the server's working directory and file access permissions.
  */
 async function readVSCodeSettings(): Promise<string[] | null> {
   try {
@@ -69,6 +73,10 @@ async function readVSCodeSettings(): Promise<string[] | null> {
 
 /**
  * Try to read and parse candidate encodings from .mcp-server.json
+ * 
+ * Security Note: This reads from process.cwd() which is controlled by the server operator
+ * who launches the MCP server. This is not a security risk as the operator already has
+ * full control over the server's working directory and file access permissions.
  */
 async function readMCPServerConfig(): Promise<string[] | null> {
   try {

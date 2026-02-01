@@ -129,7 +129,7 @@ export async function validatePath(requestedPath: string): Promise<string> {
  * @param candidates - Ordered list of candidate encodings to try
  * @returns The detected encoding name and decoded text
  */
-export async function detectEncoding(buffer: Buffer, candidates: string[]): Promise<{ encoding: string; text: string }> {
+export function detectEncoding(buffer: Buffer, candidates: string[]): { encoding: string; text: string } {
   // Try each candidate in order with round-trip test
   for (const candidate of candidates) {
     try {
@@ -255,7 +255,7 @@ export async function applyFileEdits(
   // Read file as buffer and detect encoding
   const buffer = await fs.readFile(filePath);
   const candidates = await getCandidateEncodings();
-  const { encoding, text: content } = await detectEncoding(buffer, candidates);
+  const { encoding, text: content } = detectEncoding(buffer, candidates);
   
   // Normalize line endings
   const normalizedContent = normalizeLineEndings(content);

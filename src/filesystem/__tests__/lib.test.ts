@@ -602,47 +602,47 @@ describe('Lib Functions', () => {
     });
 
     describe('detectEncoding', () => {
-      it('detects UTF-8 encoding with round-trip test', async () => {
+      it('detects UTF-8 encoding with round-trip test', () => {
         const content = 'Hello World\nLine 2';
         const buffer = Buffer.from(content, 'utf-8');
         const candidates = ['utf-8', 'windows-1253'];
         
-        const result = await detectEncoding(buffer, candidates);
+        const result = detectEncoding(buffer, candidates);
         
         expect(result.encoding).toBe('utf-8');
         expect(result.text).toBe(content);
       });
 
-      it('detects windows-1253 encoding with round-trip test', async () => {
+      it('detects windows-1253 encoding with round-trip test', () => {
         const content = 'Γειά σου κόσμε';
         const buffer = iconv.encode(content, 'windows-1253');
         const candidates = ['utf-8', 'windows-1253'];
         
-        const result = await detectEncoding(buffer, candidates);
+        const result = detectEncoding(buffer, candidates);
         
         expect(result.encoding).toBe('windows-1253');
         expect(result.text).toBe(content);
       });
 
-      it('tries candidates in order', async () => {
+      it('tries candidates in order', () => {
         const content = 'Simple ASCII text';
         const buffer = Buffer.from(content, 'utf-8');
         // Both utf-8 and windows-1253 can encode ASCII, should pick first that works
         const candidates = ['windows-1253', 'utf-8'];
         
-        const result = await detectEncoding(buffer, candidates);
+        const result = detectEncoding(buffer, candidates);
         
         // Should pick windows-1253 since it's first and round-trips successfully
         expect(result.encoding).toBe('windows-1253');
         expect(result.text).toBe(content);
       });
 
-      it('falls back to UTF-8 if no candidate works', async () => {
+      it('falls back to UTF-8 if no candidate works', () => {
         const content = 'Fallback test';
         const buffer = Buffer.from(content, 'utf-8');
         const candidates = ['unsupported-encoding'];
         
-        const result = await detectEncoding(buffer, candidates);
+        const result = detectEncoding(buffer, candidates);
         
         // chardet may detect ASCII (subset of UTF-8) for simple text
         expect(['utf-8', 'ASCII']).toContain(result.encoding);
