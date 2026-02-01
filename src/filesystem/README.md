@@ -60,6 +60,84 @@ The server's directory access control follows this flow:
 
 **Note**: The server will only allow operations within directories specified either via `args` or via Roots.
 
+## File Encoding Detection and Preservation
+
+The filesystem server automatically detects and preserves file encodings when reading and writing files. This ensures that files encoded in non-UTF-8 encodings (such as Windows-1253 for Greek text) are not corrupted during editing operations.
+
+### How Encoding Detection Works
+
+When reading a file, the server:
+1. Reads the file as a raw Buffer
+2. Tries each candidate encoding in order using a round-trip test (decode → re-encode → compare with original)
+3. Selects the first encoding that successfully round-trips
+4. Falls back to `chardet` library detection if no candidate works
+5. Uses UTF-8 as the final fallback
+
+When writing or editing a file, the server preserves the detected encoding, ensuring file integrity across edit operations.
+
+### Configuring Candidate Encodings
+
+You can specify which encodings to try (in order of preference) using one of these methods:
+
+#### 1. Environment Variable (Highest Priority)
+
+Set the `MCP_CANDIDATE_ENCODINGS` environment variable with a comma-separated list:
+
+```bash
+export MCP_CANDIDATE_ENCODINGS="utf-8,windows-1253,iso-8859-7"
+mcp-server-filesystem /path/to/dir
+```
+
+#### 2. VS Code Workspace Settings
+
+Create or edit `.vscode/settings.json` in your workspace:
+
+```json
+{
+  "files.candidateGuessEncodings": ["utf-8", "windows-1253", "iso-8859-7"]
+}
+```
+
+This integrates with VS Code's encoding settings for a consistent experience.
+
+#### 3. MCP Server Configuration File
+
+Create a `.mcp-server.json` file in your repository root:
+
+```json
+{
+  "files.candidateGuessEncodings": ["utf-8", "windows-1253", "iso-8859-7"]
+}
+```
+
+#### 4. Default Encodings
+
+If no configuration is provided, the server uses: `["utf-8", "windows-1253"]`
+
+### Configuration Precedence
+
+The server checks for candidate encodings in this order:
+1. `MCP_CANDIDATE_ENCODINGS` environment variable
+2. `.vscode/settings.json` with key `"files.candidateGuessEncodings"`
+3. `.mcp-server.json` with key `"files.candidateGuessEncodings"`
+4. Default list: `["utf-8", "windows-1253"]`
+
+### Supported Encodings
+
+The server uses the `iconv-lite` library, which supports a wide range of encodings including:
+- UTF-8, UTF-16, UTF-32 (all variants)
+- Windows code pages (windows-1250 through windows-1258, etc.)
+- ISO-8859 series (iso-8859-1 through iso-8859-16)
+- Legacy encodings (cp437, cp866, koi8-r, etc.)
+
+For a complete list, see [iconv-lite supported encodings](https://github.com/ashtuchkin/iconv-lite/wiki/Supported-Encodings).
+
+### Encoding Aliases
+
+Common encoding aliases are automatically normalized:
+- `utf8` → `utf-8`
+- `windows1253`, `cp1253` → `windows-1253`
+- `iso88597` → `iso-8859-7`
 
 
 ## API
@@ -72,7 +150,7 @@ The server's directory access control follows this flow:
     - `path` (string)
     - `head` (number, optional): First N lines
     - `tail` (number, optional): Last N lines
-  - Always treats the file as UTF-8 text regardless of extension
+  - Automatically detects file encoding using configured candidate encodings
   - Cannot specify both `head` and `tail` simultaneously
 
 - **read_media_file**
@@ -99,6 +177,7 @@ The server's directory access control follows this flow:
     - Whitespace normalization with indentation preservation
     - Multiple simultaneous edits with correct positioning
     - Indentation style detection and preservation
+    - Automatic encoding detection and preservation
     - Git-style diff output with context
     - Preview changes with dry run mode
   - Inputs:
@@ -109,6 +188,7 @@ The server's directory access control follows this flow:
     - `dryRun` (boolean): Preview changes without applying (default: false)
   - Returns detailed diff and match information for dry runs, otherwise applies changes
   - Best Practice: Always use dryRun first to preview changes before applying them
+  - Note: File encoding is automatically detected and preserved during edits
 
 - **create_directory**
   - Create new directory or ensure it exists

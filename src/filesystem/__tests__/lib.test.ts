@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
+import * as iconv from 'iconv-lite';
 import {
   // Pure utility functions
   formatSize,
@@ -19,12 +20,18 @@ import {
   // File editing functions
   applyFileEdits,
   tailFile,
-  headFile
+  headFile,
+  detectEncoding
 } from '../lib.js';
 
 // Mock fs module
 vi.mock('fs/promises');
 const mockFs = fs as any;
+
+// Mock encoding-config module
+vi.mock('../encoding-config.js', () => ({
+  getCandidateEncodings: vi.fn(async () => ['utf-8', 'windows-1253'])
+}));
 
 describe('Lib Functions', () => {
   beforeEach(() => {
@@ -277,12 +284,30 @@ describe('Lib Functions', () => {
     });
 
     describe('writeFileContent', () => {
-      it('writes file content', async () => {
+      it('writes file content with default UTF-8 encoding', async () => {
         mockFs.writeFile.mockResolvedValueOnce(undefined);
         
         await writeFileContent('/test/file.txt', 'new content');
         
-        expect(mockFs.writeFile).toHaveBeenCalledWith('/test/file.txt', 'new content', { encoding: "utf-8", flag: 'wx' });
+        // Should write as Buffer with 'wx' flag
+        expect(mockFs.writeFile).toHaveBeenCalledWith(
+          '/test/file.txt',
+          Buffer.from('new content', 'utf-8'),
+          { flag: 'wx' }
+        );
+      });
+
+      it('writes file content with custom encoding', async () => {
+        mockFs.writeFile.mockResolvedValueOnce(undefined);
+        
+        await writeFileContent('/test/file.txt', 'test content', 'windows-1253');
+        
+        // Should encode with iconv-lite
+        expect(mockFs.writeFile).toHaveBeenCalledWith(
+          '/test/file.txt',
+          iconv.encode('test content', 'windows-1253'),
+          { flag: 'wx' }
+        );
       });
     });
 
@@ -390,7 +415,8 @@ describe('Lib Functions', () => {
   describe('File Editing Functions', () => {
     describe('applyFileEdits', () => {
       beforeEach(() => {
-        mockFs.readFile.mockResolvedValue('line1\nline2\nline3\n');
+        // Mock readFile to return a Buffer (UTF-8 encoded)
+        mockFs.readFile.mockResolvedValue(Buffer.from('line1\nline2\nline3\n', 'utf-8'));
         mockFs.writeFile.mockResolvedValue(undefined);
       });
 
@@ -404,11 +430,10 @@ describe('Lib Functions', () => {
         const result = await applyFileEdits('/test/file.txt', edits, false);
         
         expect(result).toContain('modified line2');
-        // Should write to temporary file then rename
+        // Should write a Buffer to temporary file then rename
         expect(mockFs.writeFile).toHaveBeenCalledWith(
           expect.stringMatching(/\/test\/file\.txt\.[a-f0-9]+\.tmp$/),
-          'line1\nmodified line2\nline3\n',
-          'utf-8'
+          Buffer.from('line1\nmodified line2\nline3\n', 'utf-8')
         );
         expect(mockFs.rename).toHaveBeenCalledWith(
           expect.stringMatching(/\/test\/file\.txt\.[a-f0-9]+\.tmp$/),
@@ -439,8 +464,7 @@ describe('Lib Functions', () => {
         
         expect(mockFs.writeFile).toHaveBeenCalledWith(
           expect.stringMatching(/\/test\/file\.txt\.[a-f0-9]+\.tmp$/),
-          'first line\nline2\nthird line\n',
-          'utf-8'
+          Buffer.from('first line\nline2\nthird line\n', 'utf-8')
         );
         expect(mockFs.rename).toHaveBeenCalledWith(
           expect.stringMatching(/\/test\/file\.txt\.[a-f0-9]+\.tmp$/),
@@ -449,7 +473,7 @@ describe('Lib Functions', () => {
       });
 
       it('handles whitespace-flexible matching', async () => {
-        mockFs.readFile.mockResolvedValue('  line1\n    line2\n  line3\n');
+        mockFs.readFile.mockResolvedValue(Buffer.from('  line1\n    line2\n  line3\n', 'utf-8'));
         
         const edits = [
           { oldText: 'line2', newText: 'modified line2' }
@@ -461,8 +485,7 @@ describe('Lib Functions', () => {
         
         expect(mockFs.writeFile).toHaveBeenCalledWith(
           expect.stringMatching(/\/test\/file\.txt\.[a-f0-9]+\.tmp$/),
-          '  line1\n    modified line2\n  line3\n',
-          'utf-8'
+          Buffer.from('  line1\n    modified line2\n  line3\n', 'utf-8')
         );
         expect(mockFs.rename).toHaveBeenCalledWith(
           expect.stringMatching(/\/test\/file\.txt\.[a-f0-9]+\.tmp$/),
@@ -480,7 +503,7 @@ describe('Lib Functions', () => {
       });
 
       it('handles complex multi-line edits with indentation', async () => {
-        mockFs.readFile.mockResolvedValue('function test() {\n  console.log("hello");\n  return true;\n}');
+        mockFs.readFile.mockResolvedValue(Buffer.from('function test() {\n  console.log("hello");\n  return true;\n}', 'utf-8'));
         
         const edits = [
           { 
@@ -495,8 +518,7 @@ describe('Lib Functions', () => {
         
         expect(mockFs.writeFile).toHaveBeenCalledWith(
           expect.stringMatching(/\/test\/file\.js\.[a-f0-9]+\.tmp$/),
-          'function test() {\n  console.log("world");\n  console.log("test");\n  return false;\n}',
-          'utf-8'
+          Buffer.from('function test() {\n  console.log("world");\n  console.log("test");\n  return false;\n}', 'utf-8')
         );
         expect(mockFs.rename).toHaveBeenCalledWith(
           expect.stringMatching(/\/test\/file\.js\.[a-f0-9]+\.tmp$/),
@@ -505,7 +527,7 @@ describe('Lib Functions', () => {
       });
 
       it('handles edits with different indentation patterns', async () => {
-        mockFs.readFile.mockResolvedValue('    if (condition) {\n        doSomething();\n    }');
+        mockFs.readFile.mockResolvedValue(Buffer.from('    if (condition) {\n        doSomething();\n    }', 'utf-8'));
         
         const edits = [
           { 
@@ -520,8 +542,7 @@ describe('Lib Functions', () => {
         
         expect(mockFs.writeFile).toHaveBeenCalledWith(
           expect.stringMatching(/\/test\/file\.js\.[a-f0-9]+\.tmp$/),
-          '    if (condition) {\n        doSomethingElse();\n        doAnotherThing();\n    }',
-          'utf-8'
+          Buffer.from('    if (condition) {\n        doSomethingElse();\n        doAnotherThing();\n    }', 'utf-8')
         );
         expect(mockFs.rename).toHaveBeenCalledWith(
           expect.stringMatching(/\/test\/file\.js\.[a-f0-9]+\.tmp$/),
@@ -530,7 +551,7 @@ describe('Lib Functions', () => {
       });
 
       it('handles CRLF line endings in file content', async () => {
-        mockFs.readFile.mockResolvedValue('line1\r\nline2\r\nline3\r\n');
+        mockFs.readFile.mockResolvedValue(Buffer.from('line1\r\nline2\r\nline3\r\n', 'utf-8'));
         
         const edits = [
           { oldText: 'line2', newText: 'modified line2' }
@@ -542,13 +563,90 @@ describe('Lib Functions', () => {
         
         expect(mockFs.writeFile).toHaveBeenCalledWith(
           expect.stringMatching(/\/test\/file\.txt\.[a-f0-9]+\.tmp$/),
-          'line1\nmodified line2\nline3\n',
-          'utf-8'
+          Buffer.from('line1\nmodified line2\nline3\n', 'utf-8')
         );
         expect(mockFs.rename).toHaveBeenCalledWith(
           expect.stringMatching(/\/test\/file\.txt\.[a-f0-9]+\.tmp$/),
           '/test/file.txt'
         );
+      });
+
+      it('preserves windows-1253 encoding when editing files', async () => {
+        // Create a test string with Greek characters that differ between UTF-8 and Windows-1253
+        const originalContent = 'Γειά σου κόσμε\nline2\nline3';
+        const modifiedContent = 'Γειά σου κόσμε\nmodified line2\nline3';
+        
+        // Encode original content in windows-1253
+        const originalBuffer = iconv.encode(originalContent, 'windows-1253');
+        mockFs.readFile.mockResolvedValue(originalBuffer);
+        
+        const edits = [
+          { oldText: 'line2', newText: 'modified line2' }
+        ];
+        
+        mockFs.rename.mockResolvedValueOnce(undefined);
+        
+        await applyFileEdits('/test/file.txt', edits, false);
+        
+        // Should write back with windows-1253 encoding
+        const expectedBuffer = iconv.encode(modifiedContent, 'windows-1253');
+        expect(mockFs.writeFile).toHaveBeenCalledWith(
+          expect.stringMatching(/\/test\/file\.txt\.[a-f0-9]+\.tmp$/),
+          expectedBuffer
+        );
+        expect(mockFs.rename).toHaveBeenCalledWith(
+          expect.stringMatching(/\/test\/file\.txt\.[a-f0-9]+\.tmp$/),
+          '/test/file.txt'
+        );
+      });
+    });
+
+    describe('detectEncoding', () => {
+      it('detects UTF-8 encoding with round-trip test', () => {
+        const content = 'Hello World\nLine 2';
+        const buffer = Buffer.from(content, 'utf-8');
+        const candidates = ['utf-8', 'windows-1253'];
+        
+        const result = detectEncoding(buffer, candidates);
+        
+        expect(result.encoding).toBe('utf-8');
+        expect(result.text).toBe(content);
+      });
+
+      it('detects windows-1253 encoding with round-trip test', () => {
+        const content = 'Γειά σου κόσμε';
+        const buffer = iconv.encode(content, 'windows-1253');
+        const candidates = ['utf-8', 'windows-1253'];
+        
+        const result = detectEncoding(buffer, candidates);
+        
+        expect(result.encoding).toBe('windows-1253');
+        expect(result.text).toBe(content);
+      });
+
+      it('tries candidates in order', () => {
+        const content = 'Simple ASCII text';
+        const buffer = Buffer.from(content, 'utf-8');
+        // Both utf-8 and windows-1253 can encode ASCII, should pick first that works
+        const candidates = ['windows-1253', 'utf-8'];
+        
+        const result = detectEncoding(buffer, candidates);
+        
+        // Should pick windows-1253 since it's first and round-trips successfully
+        expect(result.encoding).toBe('windows-1253');
+        expect(result.text).toBe(content);
+      });
+
+      it('falls back to UTF-8 if no candidate works', () => {
+        const content = 'Fallback test';
+        const buffer = Buffer.from(content, 'utf-8');
+        const candidates = ['unsupported-encoding'];
+        
+        const result = detectEncoding(buffer, candidates);
+        
+        // chardet may detect ASCII (subset of UTF-8) for simple text
+        expect(['utf-8', 'ASCII']).toContain(result.encoding);
+        expect(result.text).toBe(content);
       });
     });
 
