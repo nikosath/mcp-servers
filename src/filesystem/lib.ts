@@ -4,11 +4,17 @@ import os from 'os';
 import { randomBytes } from 'crypto';
 import { diffLines, createTwoFilesPatch } from 'diff';
 import { minimatch } from 'minimatch';
+import * as iconv from 'iconv-lite';
+import chardet from 'chardet';
 import { normalizePath, expandHome } from './path-utils.js';
 import { isPathWithinAllowedDirectories } from './path-validation.js';
+import { getCandidateEncodings, normalizeEncodingName } from './encoding-config.js';
 
 // Global allowed directories - set by the main module
 let allowedDirectories: string[] = [];
+
+// Global candidate encodings - set by the main module
+let candidateEncodings: string[] = [];
 
 // Function to set allowed directories from the main module
 export function setAllowedDirectories(directories: string[]): void {
@@ -18,6 +24,16 @@ export function setAllowedDirectories(directories: string[]): void {
 // Function to get current allowed directories
 export function getAllowedDirectories(): string[] {
   return [...allowedDirectories];
+}
+
+// Function to set candidate encodings from the main module
+export function setCandidateEncodings(encodings: string[]): void {
+  candidateEncodings = [...encodings];
+}
+
+// Function to get current candidate encodings
+export function getCandidateEncodingsList(): string[] {
+  return [...candidateEncodings];
 }
 
 // Type definitions
@@ -38,6 +54,11 @@ export interface SearchOptions {
 export interface SearchResult {
   path: string;
   isDirectory: boolean;
+}
+
+export interface FileContentResult {
+  text: string;
+  encoding: string;
 }
 
 // Pure Utility Functions
@@ -131,15 +152,88 @@ export async function getFileStats(filePath: string): Promise<FileInfo> {
   };
 }
 
-export async function readFileContent(filePath: string, encoding: string = 'utf-8'): Promise<string> {
-  return await fs.readFile(filePath, encoding as BufferEncoding);
+/**
+ * Detect file encoding using round-trip verification with candidate encodings
+ * @param buffer - File content as Buffer
+ * @returns detected encoding name
+ */
+export function detectEncoding(buffer: Buffer): string {
+  const candidates = candidateEncodings.length > 0 ? candidateEncodings : ['utf-8', 'windows-1253'];
+  
+  // Try each candidate with round-trip verification
+  for (const candidate of candidates) {
+    try {
+      // Decode buffer with candidate encoding
+      const decoded = iconv.decode(buffer, candidate);
+      // Re-encode with same encoding
+      const reencoded = iconv.encode(decoded, candidate);
+      
+      // Check if round-trip produces identical bytes
+      if (buffer.equals(reencoded)) {
+        return candidate;
+      }
+    } catch (error) {
+      // If encoding is not supported or fails, try next candidate
+      continue;
+    }
+  }
+  
+  // If no candidate round-trips, try chardet
+  try {
+    const detected = chardet.detect(buffer);
+    if (detected) {
+      const normalized = normalizeEncodingName(detected);
+      // Verify chardet result with round-trip
+      try {
+        const decoded = iconv.decode(buffer, normalized);
+        const reencoded = iconv.encode(decoded, normalized);
+        if (buffer.equals(reencoded)) {
+          return normalized;
+        }
+      } catch {
+        // chardet result didn't work, fall through
+      }
+    }
+  } catch {
+    // chardet failed, fall through
+  }
+  
+  // Default to UTF-8
+  return 'utf-8';
 }
 
-export async function writeFileContent(filePath: string, content: string): Promise<void> {
+export async function readFileContent(filePath: string, encoding?: string): Promise<string>;
+export async function readFileContent(filePath: string, encoding: string | undefined, returnEncoding: true): Promise<FileContentResult>;
+export async function readFileContent(filePath: string, encoding?: string, returnEncoding?: boolean): Promise<string | FileContentResult> {
+  if (encoding) {
+    // If encoding is explicitly provided, use it
+    const content = iconv.decode(await fs.readFile(filePath), encoding);
+    if (returnEncoding) {
+      return { text: content, encoding };
+    }
+    return content;
+  }
+  
+  // Auto-detect encoding
+  const buffer = await fs.readFile(filePath);
+  const detectedEncoding = detectEncoding(buffer);
+  const content = iconv.decode(buffer, detectedEncoding);
+  
+  if (returnEncoding) {
+    return { text: content, encoding: detectedEncoding };
+  }
+  return content;
+}
+
+export async function writeFileContent(filePath: string, content: string, encoding?: string): Promise<void> {
+  const outputBuffer = encoding && encoding !== 'utf-8' 
+    ? iconv.encode(content, encoding)
+    : Buffer.from(content, 'utf-8');
+    
   try {
     // Security: 'wx' flag ensures exclusive creation - fails if file/symlink exists,
     // preventing writes through pre-existing symlinks
-    await fs.writeFile(filePath, content, { encoding: "utf-8", flag: 'wx' });
+    await fs.writeFile(filePath, outputBuffer, { flag: 'wx' });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
       // Security: Use atomic rename to prevent race conditions where symlinks
@@ -147,7 +241,7 @@ export async function writeFileContent(filePath: string, content: string): Promi
       // replace the target file atomically and don't follow symlinks.
       const tempPath = `${filePath}.${randomBytes(16).toString('hex')}.tmp`;
       try {
-        await fs.writeFile(tempPath, content, 'utf-8');
+        await fs.writeFile(tempPath, outputBuffer);
         await fs.rename(tempPath, filePath);
       } catch (renameError) {
         try {
@@ -173,8 +267,10 @@ export async function applyFileEdits(
   edits: FileEdit[],
   dryRun: boolean = false
 ): Promise<string> {
-  // Read file content and normalize line endings
-  const content = normalizeLineEndings(await fs.readFile(filePath, 'utf-8'));
+  // Read file content with encoding detection
+  const buffer = await fs.readFile(filePath);
+  const detectedEncoding = detectEncoding(buffer);
+  const content = normalizeLineEndings(iconv.decode(buffer, detectedEncoding));
 
   // Apply edits sequentially
   let modifiedContent = content;
@@ -243,9 +339,12 @@ export async function applyFileEdits(
     // Security: Use atomic rename to prevent race conditions where symlinks
     // could be created between validation and write. Rename operations
     // replace the target file atomically and don't follow symlinks.
+    const outputBuffer = detectedEncoding && detectedEncoding !== 'utf-8'
+      ? iconv.encode(modifiedContent, detectedEncoding)
+      : Buffer.from(modifiedContent, 'utf-8');
     const tempPath = `${filePath}.${randomBytes(16).toString('hex')}.tmp`;
     try {
-      await fs.writeFile(tempPath, modifiedContent, 'utf-8');
+      await fs.writeFile(tempPath, outputBuffer);
       await fs.rename(tempPath, filePath);
     } catch (error) {
       try {

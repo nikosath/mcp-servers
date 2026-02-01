@@ -14,6 +14,7 @@ import { z } from "zod";
 import { minimatch } from "minimatch";
 import { normalizePath, expandHome } from './path-utils.js';
 import { getValidRootDirectories } from './roots-utils.js';
+import { getCandidateEncodings } from './encoding-config.js';
 import {
   // Function imports
   formatSize,
@@ -26,21 +27,45 @@ import {
   tailFile,
   headFile,
   setAllowedDirectories,
+  setCandidateEncodings,
 } from './lib.js';
 
 // Command line argument parsing
 const args = process.argv.slice(2);
-if (args.length === 0) {
-  console.error("Usage: mcp-server-filesystem [allowed-directory] [additional-directories...]");
+
+// Parse --candidate-encodings flag
+let candidateEncodingsFlag: string | undefined;
+const filteredArgs: string[] = [];
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === '--candidate-encodings' && i + 1 < args.length) {
+    candidateEncodingsFlag = args[i + 1];
+    i++; // Skip the next argument
+  } else if (args[i].startsWith('--candidate-encodings=')) {
+    candidateEncodingsFlag = args[i].substring('--candidate-encodings='.length);
+  } else {
+    filteredArgs.push(args[i]);
+  }
+}
+
+if (filteredArgs.length === 0) {
+  console.error("Usage: mcp-server-filesystem [--candidate-encodings ENCODINGS] [allowed-directory] [additional-directories...]");
   console.error("Note: Allowed directories can be provided via:");
   console.error("  1. Command-line arguments (shown above)");
   console.error("  2. MCP roots protocol (if client supports it)");
   console.error("At least one directory must be provided by EITHER method for the server to operate.");
+  console.error("");
+  console.error("Options:");
+  console.error("  --candidate-encodings    Comma-separated list of encodings to try (e.g., 'utf-8,windows-1253')");
 }
+
+// Initialize candidate encodings early
+const candidateEncodings = await getCandidateEncodings(candidateEncodingsFlag);
+setCandidateEncodings(candidateEncodings);
+console.error(`Using candidate encodings: ${candidateEncodings.join(', ')}`);
 
 // Store allowed directories in normalized and resolved form
 let allowedDirectories = await Promise.all(
-  args.map(async (dir) => {
+  filteredArgs.map(async (dir) => {
     const expanded = expandHome(dir);
     const absolute = path.resolve(expanded);
     try {
