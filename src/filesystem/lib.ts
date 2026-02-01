@@ -4,8 +4,8 @@ import os from 'os';
 import { randomBytes } from 'crypto';
 import { diffLines, createTwoFilesPatch } from 'diff';
 import { minimatch } from 'minimatch';
-import * as iconv from 'iconv-lite';
-import * as chardet from 'chardet';
+import iconv from 'iconv-lite';
+import chardet from 'chardet';
 import { normalizePath, expandHome } from './path-utils.js';
 import { isPathWithinAllowedDirectories } from './path-validation.js';
 import { getCandidateEncodings } from './encoding-config.js';
@@ -67,7 +67,37 @@ export function normalizeLineEndings(text: string): string {
 async function detectEncoding(buffer: Buffer, candidates?: string[]): Promise<string> {
   const candidateList = candidates || await getCandidateEncodings();
   
-  // Try each candidate encoding in order
+  // First, use chardet for automatic detection
+  try {
+    const detected = chardet.detect(buffer);
+    if (detected && typeof detected === 'string') {
+      // Normalize the detected encoding
+      const normalizedDetected = detected.toLowerCase().replace(/[_-]/g, '');
+      
+      // Check if detected encoding is in candidate list
+      const matchingCandidate = candidateList.find(c => 
+        c.toLowerCase().replace(/[_-]/g, '') === normalizedDetected
+      );
+      
+      if (matchingCandidate) {
+        // Verify the detection with round-trip
+        try {
+          const decoded = iconv.decode(buffer, normalizedDetected);
+          const reencoded = iconv.encode(decoded, normalizedDetected);
+          if (buffer.equals(reencoded)) {
+            return matchingCandidate;
+          }
+        } catch (error) {
+          // Round-trip failed, continue to manual detection
+        }
+      }
+    }
+  } catch (error) {
+    // Chardet failed, continue to manual detection
+  }
+  
+  // If chardet didn't work or detected encoding wasn't in candidates,
+  // try each candidate encoding in order
   for (const candidate of candidateList) {
     try {
       // Normalize encoding name for iconv-lite
@@ -92,23 +122,6 @@ async function detectEncoding(buffer: Buffer, candidates?: string[]): Promise<st
       // Skip this candidate if decoding fails
       continue;
     }
-  }
-  
-  // Fallback: use chardet for confidence-based detection
-  try {
-    const detected = chardet.detect(buffer);
-    if (detected && typeof detected === 'string') {
-      // Check if detected encoding is in candidate list
-      const normalizedDetected = detected.toLowerCase().replace(/[_-]/g, '');
-      const matchingCandidate = candidateList.find(c => 
-        c.toLowerCase().replace(/[_-]/g, '') === normalizedDetected
-      );
-      if (matchingCandidate) {
-        return matchingCandidate;
-      }
-    }
-  } catch (error) {
-    // Chardet failed, continue to fallback
   }
   
   // Final fallback: utf-8
