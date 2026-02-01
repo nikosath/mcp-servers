@@ -4,7 +4,7 @@ import os from 'os';
 import { randomBytes } from 'crypto';
 import { diffLines, createTwoFilesPatch } from 'diff';
 import { minimatch } from 'minimatch';
-import * as iconv from 'iconv-lite';
+import iconv from 'iconv-lite';
 import chardet from 'chardet';
 import { normalizePath, expandHome } from './path-utils.js';
 import { isPathWithinAllowedDirectories } from './path-validation.js';
