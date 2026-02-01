@@ -182,7 +182,8 @@ const readTextFileHandler = async (args: z.infer<typeof ReadTextFileArgsSchema>)
   } else if (args.head) {
     content = await headFile(validPath, args.head);
   } else {
-    content = await readFileContent(validPath);
+    const result = await readFileContent(validPath);
+    content = result.content;
   }
 
   return {
@@ -301,8 +302,8 @@ server.registerTool(
       args.paths.map(async (filePath: string) => {
         try {
           const validPath = await validatePath(filePath);
-          const content = await readFileContent(validPath);
-          return `${filePath}:\n${content}\n`;
+          const result = await readFileContent(validPath);
+          return `${filePath}:\n${result.content}\n`;
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           return `${filePath}: Error - ${errorMessage}`;

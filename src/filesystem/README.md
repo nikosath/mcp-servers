@@ -4,12 +4,58 @@ Node.js server implementing Model Context Protocol (MCP) for filesystem operatio
 
 ## Features
 
-- Read/write files
+- Read/write files with configurable encoding detection and preservation
 - Create/list/delete directories
 - Move files/directories
 - Search files
 - Get file metadata
 - Dynamic directory access control via [Roots](https://modelcontextprotocol.io/docs/learn/client-concepts#roots)
+
+## Encoding Detection and Preservation
+
+The filesystem server automatically detects and preserves file encodings, ensuring files in non-UTF-8 encodings (like Windows-1253, ISO-8859-7, etc.) are read and written correctly without corruption.
+
+### Configuration
+
+Candidate encodings can be configured via (in order of precedence):
+
+1. **Environment Variable**: `MCP_CANDIDATE_ENCODINGS`
+   ```bash
+   export MCP_CANDIDATE_ENCODINGS="utf-8,windows-1253,iso-8859-7"
+   ```
+
+2. **VS Code Workspace Settings**: `.vscode/settings.json`
+   ```json
+   {
+     "files.candidateEncodings": ["utf-8", "windows-1253", "iso-8859-7"]
+   }
+   ```
+   or as a comma-separated string:
+   ```json
+   {
+     "files.candidateEncodings": "utf-8,windows-1253,iso-8859-7"
+   }
+   ```
+
+3. **Default**: If neither is configured, the server uses `["utf-8", "windows1253"]`
+
+### How It Works
+
+- When reading files, the server uses chardet for automatic encoding detection
+- Detection is validated using round-trip testing: decode with detected encoding, re-encode, and verify bytes match
+- If chardet fails or detected encoding isn't in candidate list, tries each candidate in order with round-trip validation
+- Once detected, the encoding is preserved when writing the file back
+- The `edit_file` tool automatically preserves the original encoding when applying edits
+
+### Supported Encodings
+
+The server uses [iconv-lite](https://github.com/ashtuchkin/iconv-lite) for encoding/decoding, which supports a wide range of encodings including:
+- UTF-8, UTF-16, UTF-32 (with and without BOM)
+- Windows code pages (Windows-1250 to Windows-1258)
+- ISO-8859 series (ISO-8859-1 to ISO-8859-16)
+- And many more
+
+See the [iconv-lite documentation](https://github.com/ashtuchkin/iconv-lite/wiki/Supported-Encodings) for a complete list.
 
 ## Directory Access Control
 
