@@ -60,6 +60,82 @@ The server's directory access control follows this flow:
 
 **Note**: The server will only allow operations within directories specified either via `args` or via Roots.
 
+## Encoding Detection and Preservation
+
+The filesystem server automatically detects and preserves file encodings when reading and writing files. This ensures that files encoded in non-UTF-8 encodings (such as Windows-1253 for Greek text) are not corrupted during editing operations.
+
+### How It Works
+
+When reading a file:
+1. The server reads the file as a raw buffer
+2. It tries candidate encodings in order, using a round-trip validation test
+3. The first encoding that successfully decodes and re-encodes to match the original buffer is chosen
+4. If no candidate passes the round-trip test, [chardet](https://www.npmjs.com/package/chardet) is used for detection
+5. The file content is decoded using the detected encoding
+
+When writing or editing a file:
+- For new files via `write_file`, content is written as UTF-8 by default
+- For edits via `edit_file`, the server preserves the encoding detected during read
+
+### Configuring Candidate Encodings
+
+Candidate encodings are tried in order of preference. The server uses the first available source from this precedence list:
+
+1. **Environment Variable** (highest precedence)
+   ```bash
+   export MCP_CANDIDATE_ENCODINGS="utf-8,windows-1253,iso-8859-7"
+   ```
+
+2. **VS Code Workspace Settings**
+   Create or edit `.vscode/settings.json` in your workspace:
+   ```json
+   {
+     "files.candidateGuessEncodings": ["utf-8", "windows-1253", "iso-8859-7"]
+   }
+   ```
+   The value can be an array (recommended) or a comma-separated string.
+
+3. **Local MCP Server Configuration**
+   Create `.mcp-server.json` in your repository root:
+   ```json
+   {
+     "files.candidateGuessEncodings": ["utf-8", "windows-1253"]
+   }
+   ```
+
+4. **Default Fallback** (lowest precedence)
+   `["utf-8", "windows1253"]`
+
+### CLI Override
+
+You can override candidate encodings at runtime using the `--candidate-encodings` flag:
+
+```bash
+mcp-server-filesystem --candidate-encodings "utf-8,windows-1253,iso-8859-7" /path/to/directory
+```
+
+This takes the highest precedence, overriding all configuration files and the environment variable.
+
+### Supported Encoding Aliases
+
+Common encoding names are normalized automatically:
+- `utf8` → `utf-8`
+- `windows1253` → `windows-1253`
+- `cp1253` → `windows-1253`
+- `iso88597` → `iso-8859-7`
+
+For a complete list of supported encodings, see the [iconv-lite documentation](https://github.com/ashtuchkin/iconv-lite/wiki/Supported-Encodings).
+
+### Example Use Cases
+
+**Greek text files**: Configure `windows-1253` or `iso-8859-7` as candidate encodings to properly handle legacy Greek text files.
+
+**Multi-language projects**: List multiple encodings in order of likelihood:
+```json
+{
+  "files.candidateGuessEncodings": ["utf-8", "windows-1253", "iso-8859-7", "windows-1252"]
+}
+```
 
 
 ## API
@@ -72,7 +148,7 @@ The server's directory access control follows this flow:
     - `path` (string)
     - `head` (number, optional): First N lines
     - `tail` (number, optional): Last N lines
-  - Always treats the file as UTF-8 text regardless of extension
+  - Automatically detects file encoding using configured candidate encodings (see Encoding Detection section)
   - Cannot specify both `head` and `tail` simultaneously
 
 - **read_media_file**
